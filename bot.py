@@ -1,129 +1,139 @@
-import telebot
-import hashlib
-import time
-import os
-from datetime import datetime, timedelta
-from flask import Flask, request
-from threading import Thread
+import telebot, sqlite3, hashlib, time, os, requests
 from telebot import types
+from flask import Flask
+from threading import Thread
+from datetime import datetime, timedelta
 
 # ==========================================
-# 1. CẤU HÌNH HỆ THỐNG QUOC KHANH MEDIA
+# 1. CẤU HÌNH HỆ THỐNG
 # ==========================================
 QK_CONFIG = {
-    'token': '8562421632:AAEqooqs8sqi5DSincjE1l3Ld53YkBBI0yw', # Token của Khánh
-    'admin_id': 6684980246,                                 # ID Telegram của Khánh
+    'token': '8562421632:AAEqooqs8sqi5DSincjE1l3Ld53YkBBI0yw',
+    'admin_id': 6684980246, # ID của Lê Triệu Quốc Khánh
     'brand': 'QUOC KHANH MEDIA',
-    'salt': 'QK_PRO_SECURE_2025',                            # PHẢI KHỚP 100% VỚI JS
-    'support': 'https://zalo.me/0379378971'
+    'bank': {'id': 'MB', 'stk': '7201888888', 'name': 'LE TRIEU QUOC KHANH'},
+    'salt': 'QK_PRO_SECURE_2025'
 }
 
 bot = telebot.TeleBot(QK_CONFIG['token'])
 app = Flask('')
 
 # ==========================================
-# 2. PROXY REPORT (FIX CSP)
+# 2. CƠ SỞ DỮ LIỆU (DATABASE)
 # ==========================================
-@app.route('/')
-def home():
-    return f"{QK_CONFIG['brand']} Server is Online!"
+def init_db():
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (id INTEGER PRIMARY KEY, balance REAL DEFAULT 0, role TEXT DEFAULT 'USER')''')
+    conn.commit()
+    conn.close()
 
-@app.route('/report', methods=['POST'])
-def handle_report():
-    data = request.json
-    uid = data.get('uid', 'N/A')
-    task = data.get('task', 'N/A')
-    msg = (f"🚀 **HÀNH ĐỘNG MỚI**\n"
-           f"👤 UID khách: `{uid}`\n"
-           f"🛠️ Công việc: {task}\n"
-           f"⏰ Lúc: {datetime.now().strftime('%H:%M:%S')}")
-    bot.send_message(QK_CONFIG['admin_id'], msg, parse_mode="Markdown")
-    return {"status": "success"}, 200
+init_db()
 
-# ==========================================
-# 3. CÔNG THỨC TẠO KEY (UID + NGÀY)
-# ==========================================
-def generate_license_key(uid, days):
-    # Lấy ngày hết hạn
-    expiry = datetime.now() + timedelta(days=int(days))
-    date_str = expiry.strftime("%y%m%d") # Định dạng YYMMDD
-    
-    # Công thức băm: UID + SALT + DATE (Đảm bảo dành riêng cho từng người)
-    raw_str = f"{str(uid).strip()}:{QK_CONFIG['salt']}:{date_str}"
-    hash_v = hashlib.sha256(raw_str.encode()).hexdigest().upper()[:6]
-    
-    # Key hoàn chỉnh = Ngày (6 số) + Hash (6 ký tự)
-    final_key = f"{date_str}{hash_v}"
-    return final_key, expiry.strftime('%d/%m/%Y')
+def get_user(uid):
+    conn = sqlite3.connect('database.db')
+    user = conn.execute("SELECT balance, role FROM users WHERE id=?", (uid,)).fetchone()
+    if not user:
+        role = 'ADMIN' if uid == QK_CONFIG['admin_id'] else 'USER'
+        conn.execute("INSERT INTO users (id, balance, role) VALUES (?, 0, ?)", (uid, role))
+        conn.commit()
+        user = (0, role)
+    conn.close()
+    return user
 
 # ==========================================
-# 4. MENU VÀ CHỨC NĂNG ADMIN
+# 3. GIAO DIỆN MENU SIÊU CẤP
 # ==========================================
-def main_menu():
+def main_menu(uid):
+    balance, role = get_user(uid)
     markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    # Nút dịch vụ chính
     markup.add(
-        types.InlineKeyboardButton("🆘 Cứu Tài Khoản Hack", callback_data="svc_recovery"),
-        types.InlineKeyboardButton("🚀 Dịch Vụ SMM", callback_data="svc_smm"),
-        types.InlineKeyboardButton("🔑 Tạo Key Tool", callback_data="adm_key_info"),
-        types.InlineKeyboardButton("📞 Hỗ Trợ Zalo", url=QK_CONFIG['support'])
+        types.InlineKeyboardButton(f"💰 Số dư: {balance:,.0f}đ", callback_data="none"),
+        types.InlineKeyboardButton("💳 Nạp Tiền (Auto)", callback_data="deposit")
     )
+    markup.add(
+        types.InlineKeyboardButton("🔑 Mua Key Tool", callback_data="buy_tool"),
+        types.InlineKeyboardButton("🆘 Cứu Tài Khoản", callback_data="recovery")
+    )
+    
+    # Menu riêng cho Admin
+    if role == 'ADMIN':
+        markup.add(types.InlineKeyboardButton("👑 QUẢN TRỊ VIÊN", callback_data="admin_panel"))
+        
+    markup.add(types.InlineKeyboardButton("📞 Hỗ Trợ Zalo", url="https://zalo.me/0379378971"))
     return markup
 
 @bot.message_handler(commands=['start', 'menu'])
-def start(message):
-    text = (f"💎 **CHÀO MỪNG ĐẾN VỚI {QK_CONFIG['brand']}**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Hệ thống quản trị dịch vụ mạng xã hội chuyên nghiệp.")
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=main_menu())
+def send_welcome(message):
+    uid = message.from_user.id
+    bot.send_message(message.chat.id, 
+                     f"💎 **{QK_CONFIG['brand']}**\nChào mừng bạn đến với hệ thống Enterprise v33.0.", 
+                     reply_markup=main_menu(uid), parse_mode="Markdown")
 
-# --- LỆNH TẠO KEY (CHỈ ADMIN MỚI CHẠY ĐƯỢC) ---
-@bot.message_handler(commands=['genkey'])
-def cmd_genkey(message):
-    # Kiểm tra quyền Admin
-    if message.from_user.id != QK_CONFIG['admin_id']:
-        return bot.reply_to(message, "❌ Bạn không có quyền sử dụng lệnh này!")
+# ==========================================
+# 4. HỆ THỐNG NẠP TIỀN VIETQR
+# ==========================================
+@bot.callback_query_handler(func=lambda call: call.data == "deposit")
+def handle_deposit(call):
+    # Nội dung chuyển khoản định danh theo UID khách
+    memo = f"QKM{call.from_user.id}"
+    qr_url = f"https://img.vietqr.io/image/{QK_CONFIG['bank']['id']}-{QK_CONFIG['bank']['stk']}-compact2.png?addInfo={memo}"
     
+    text = (f"💰 **THÔNG TIN CHUYỂN KHOẢN**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 Chủ TK: `{QK_CONFIG['bank']['name']}`\n"
+            f"🏦 Ngân hàng: `{QK_CONFIG['bank']['id']}`\n"
+            f"🔢 STK: `{QK_CONFIG['bank']['stk']}`\n"
+            f"📝 Nội dung: `{memo}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ *Hệ thống tự động cộng tiền khi nhận được giao dịch.*\n"
+            f"⚠️ Quá 5p không nhận được vui lòng ib admin")
+    bot.send_photo(call.message.chat.id, qr_url, caption=text, parse_mode="Markdown")
+
+# ==========================================
+# 5. CHỨC NĂNG ADMIN (DÀNH RIÊNG CHO KHÁNH)
+# ==========================================
+@bot.callback_query_handler(func=lambda call: call.data == "admin_panel")
+def show_admin_commands(call):
+    if call.from_user.id != QK_CONFIG['admin_id']: return
+    
+    msg = (f"👑 **BẢNG LỆNH ADMIN**\n"
+           f"━━━━━━━━━━━━━━━━━━━━\n"
+           f"📍 `/nap [ID] [Tiền]` : Nạp tiền cho khách\n"
+           f"📍 `/gen [UID] [Ngày]` : Tạo key tool\n"
+           f"📍 `/users` : Thống kê người dùng\n"
+           f"📍 `/thongbao [Text]` : Gửi tin toàn hệ thống")
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+
+@bot.message_handler(commands=['nap'])
+def admin_set_balance(message):
+    if message.from_user.id != QK_CONFIG['admin_id']: return
     try:
-        # Cú pháp: /genkey [UID] [Ngày]
-        parts = message.text.split()
-        target_uid = parts[1]
-        num_days = parts[2]
-        
-        key, exp_date = generate_license_key(target_uid, num_days)
-        
-        res = (f"✅ **TẠO KEY THÀNH CÔNG**\n"
-               f"━━━━━━━━━━━━━━━━━━━━\n"
-               f"🔑 Key: `{key}`\n"
-               f"👤 UID: `{target_uid}`\n"
-               f"⏳ Hạn dùng: {num_days} ngày ({exp_date})\n"
-               f"━━━━━━━━━━━━━━━━━━━━\n"
-               f"👉 Khách hàng dán mã này vào trình duyệt để kích hoạt.")
-        bot.send_message(message.chat.id, res, parse_mode="Markdown")
-    except Exception as e:
-        bot.reply_to(message, "⚠️ Cú pháp lỗi! Hãy dùng: `/genkey [UID] [Số ngày]`")
-
-# --- CÁC MODULE KHÁC ---
-@bot.callback_query_handler(func=lambda call: True)
-def handle_query(call):
-    if call.data == "svc_recovery":
-        msg = bot.send_message(call.message.chat.id, "⚠️ **KHÔI PHỤC ACC:** Nhập Link/UID và tình trạng bị hack:")
-        bot.register_next_step_handler(msg, lambda m: bot.send_message(QK_CONFIG['admin_id'], f"🆘 **CỨU ACC:**\n{m.text}"))
-    elif call.data == "svc_smm":
-        bot.send_message(call.message.chat.id, "🚀 **DỊCH VỤ SMM:** Vui lòng liên hệ Admin để báo giá gói Tương tác.")
+        _, target_id, amount = message.text.split()
+        conn = sqlite3.connect('database.db')
+        conn.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, target_id))
+        conn.commit()
+        conn.close()
+        bot.send_message(target_id, f"✅ **NẠP THÀNH CÔNG**\nBạn vừa được cộng {int(amount):,.0f}đ vào tài khoản.")
+        bot.reply_to(message, "Đã cập nhật số dư cho khách.")
+    except: bot.reply_to(message, "Cú pháp: `/nap [ID] [Số tiền]`")
 
 # ==========================================
-# 5. KHỞI CHẠY & ANTI-CONFLICT
+# 6. DUY TRÌ ONLINE (RENDER/UPTIMEROBOT)
 # ==========================================
-def run_flask():
-    app.run(host='0.0.0.0', port=10000)
+@app.route('/')
+def health_check(): return "QK Media Core is Online!"
+
+def run_flask(): app.run(host='0.0.0.0', port=10000)
 
 if __name__ == '__main__':
-    Thread(target=run_flask).start()
-    print(f"--- {QK_CONFIG['brand']} SERVER IS ONLINE ---")
-    
+    Thread(target=run_flask).start() # Giữ Render không ngủ
+    print(f"--- {QK_CONFIG['brand']} IS STARTING ---")
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception:
-            # Tự phục hồi khi rớt mạng
-            time.sleep(5)
+            time.sleep(5) # Tự phục hồi khi gặp lỗi image_219ce8.png
