@@ -1,161 +1,130 @@
 import telebot
-import hashlib
-import sqlite3
-import requests
 import time
-import os
-from datetime import datetime, timedelta
+import hashlib
+from flask import Flask
+from threading import Thread
 from telebot import types
 
 # ==========================================
-# 1. CẤU HÌNH HỆ THỐNG - QUOC KHANH MEDIA
+# 1. CẤU HÌNH QUOC KHANH MEDIA
 # ==========================================
 QK_CONFIG = {
-    'token': '8562421632:AAEqooqs8sqi5DSincjE1l3Ld53YkBBI0yw',           # Thay bằng Token Bot từ @BotFather
-    'admin_id': 6684980246,               # Thay bằng ID Telegram của bạn (Gõ /id để lấy)
-    'brand': 'QUOC KHANH MEDIA',         # Tên thương hiệu của bạn
-    'contact': 'https://zalo.me/0379378971', # Link liên hệ hỗ trợ
-    'salt': 'QK_PRO_SECURE_2025'         # Mã bí mật (Phải khớp 100% với code JS)
+    'token': '8562421632:AAEqooqs8sqi5DSincjE1l3Ld53YkBBI0yw',
+    'admin_id': 6684980246,
+    'brand': 'QUOC KHANH MEDIA',
+    'support': 'https://zalo.me/0379378971'
 }
 
 bot = telebot.TeleBot(QK_CONFIG['token'])
+app = Flask('')
+
+@app.route('/')
+def home(): return "QK Media System is Online!" # Giữ Render không ngủ
 
 # ==========================================
-# 2. KHỞI TẠO CƠ SỞ DỮ LIỆU (SQLITE)
+# 2. GIAO DIỆN MENU CHÍNH
 # ==========================================
-def get_db():
-    conn = sqlite3.connect('quockhanh_media.db', check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+def main_menu():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("🛠️ Khôi Phục Tài Khoản", callback_query_id="recovery")
+    btn2 = types.InlineKeyboardButton("🚀 Dịch Vụ Tương Tác", callback_data="smm_menu")
+    btn3 = types.InlineKeyboardButton("🔑 Tạo Key Tool", callback_data="gen_key_info")
+    btn4 = types.InlineKeyboardButton("📞 Hỗ Trợ Zalo", url=QK_CONFIG['support'])
+    markup.add(btn1, btn2, btn3, btn4)
+    return markup
 
-def init_db():
-    conn = get_db()
-    cursor = conn.cursor()
-    # Lưu người dùng đã kích hoạt Key (UID liên kết với ngày hết hạn)
-    cursor.execute('''CREATE TABLE IF NOT EXISTS active_users 
-                      (user_id TEXT PRIMARY KEY, key_code TEXT, expiry_date TEXT)''')
-    # Lưu nhật ký hoạt động của khách hàng
-    cursor.execute('''CREATE TABLE IF NOT EXISTS action_logs 
-                      (user_id TEXT, task_type TEXT, target TEXT, timestamp TEXT)''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# ==========================================
-# 3. HÀM XỬ LÝ LOGIC NỘI BỘ
-# ==========================================
-def is_admin(uid):
-    return int(uid) == QK_CONFIG['admin_id']
-
-def check_access(uid):
-    if is_admin(uid): return True, "Admin (Vĩnh viễn)"
-    conn = get_db()
-    user = conn.execute("SELECT expiry_date FROM active_users WHERE user_id = ?", (str(uid),)).fetchone()
-    conn.close()
-    if user:
-        expiry = datetime.strptime(user['expiry_date'], '%d/%m/%Y')
-        if datetime.now() <= expiry: return True, user['expiry_date']
-    return False, "Chưa kích hoạt"
-
-def generate_key_js(uid, days):
-    expiry = datetime.now() + timedelta(days=int(days))
-    date_str = expiry.strftime("%y%m%d") # Lấy 6 số của ngày hết hạn
-    # Thuật toán: SHA256(UID:SALT:YYMMDD) - Đồng bộ với script trình duyệt
-    raw = f"{str(uid).strip()}:{QK_CONFIG['salt']}:{date_str}"
-    hash_v = hashlib.sha256(raw.encode()).hexdigest().upper()[:6]
-    return f"{date_str}{hash_v}", expiry.strftime('%d/%m/%Y')
-
-# ==========================================
-# 4. CÁC CHỨC NĂNG CHÍNH (CHECK/UNLOCK)
-# ==========================================
-def check_tiktok(target):
-    url = f"https://www.tiktok.com/@{target.replace('@','')}"
-    try:
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if res.status_code == 404: return "❌ Tài khoản KHÔNG TỒN TẠI hoặc bị xóa."
-        if "webapp.user-detail" in res.text or res.status_code == 200: return "✅ Tài khoản đang HOẠT ĐỘNG."
-        return "⚠️ Tài khoản bị KHÓA (Banned)."
-    except: return "🌐 Lỗi kết nối máy chủ TikTok."
-
-def check_fb(target):
-    url = f"https://www.facebook.com/{target}"
-    try:
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if "checkpoint" in res.url: return "⚠️ Tài khoản bị CHECKPOINT."
-        if res.status_code == 404: return "❌ Tài khoản DIE hoặc không tồn tại."
-        return "✅ Tài khoản SỐNG."
-    except: return "🌐 Lỗi kết nối máy chủ Facebook."
-
-# ==========================================
-# 5. GIAO DIỆN VÀ LỆNH ĐIỀU KHIỂN
-# ==========================================
 @bot.message_handler(commands=['start', 'menu'])
-def cmd_start(message):
-    uid = message.from_user.id
-    auth, info = check_access(uid)
+def welcome(message):
+    text = (f"💎 **CHÀO MỪNG ĐẾN VỚI {QK_CONFIG['brand']}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Hệ thống cung cấp giải pháp bẻ khóa, khôi phục và tăng tương tác mạng xã hội hàng đầu.")
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=main_menu())
+
+# ==========================================
+# 3. XỬ LÝ DỊCH VỤ TƯƠNG TÁC (SMM)
+# ==========================================
+@bot.callback_query_handler(func=lambda call: call.data == "smm_menu")
+def smm_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("📱 Unlock TikTok", callback_data="ui_tk"),
-        types.InlineKeyboardButton("🔵 Unlock Facebook", callback_data="ui_fb"),
-        types.InlineKeyboardButton("📞 Hỗ trợ Zalo", url=QK_CONFIG['contact'])
+        types.InlineKeyboardButton("🔵 Facebook (Like/Follow)", callback_data="smm_fb"),
+        types.InlineKeyboardButton("📱 TikTok (View/Follow)", callback_data="smm_tk"),
+        types.InlineKeyboardButton("🔙 Quay lại", callback_data="back_main")
     )
-    
-    welcome = (f"🔥 **HỆ THỐNG {QK_CONFIG['brand']}**\n"
-               f"━━━━━━━━━━━━━━━━━━\n"
-               f"👤 Khách hàng: `{message.from_user.first_name}`\n"
-               f"🆔 ID: `{uid}`\n"
-               f"🛡️ Bản quyền: {info}\n"
-               f"━━━━━━━━━━━━━━━━━━\n"
-               "Vui lòng chọn chức năng bạn cần sử dụng:")
-    bot.send_message(message.chat.id, welcome, parse_mode="Markdown", reply_markup=markup)
+    bot.edit_message_text("🚀 **CHỌN NỀN TẢNG TƯƠNG TÁC:**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-@bot.message_handler(commands=['genkey'])
-def cmd_genkey(message):
-    if not is_admin(message.from_user.id): return
-    try:
-        # Cú pháp: /genkey [UID_Khách] [Số_Ngày]
-        _, target_uid, days = message.text.split()
-        key, exp_date = generate_key_js(target_uid, days)
-        
-        # Lưu vào DB
-        conn = get_db()
-        conn.execute("INSERT OR REPLACE INTO active_users VALUES (?, ?, ?)", (target_uid, key, exp_date))
-        conn.commit()
-        conn.close()
-        
-        bot.reply_to(message, f"✅ **TẠO KEY THÀNH CÔNG**\n🔑 Key: `{key}`\n👤 Cho UID: `{target_uid}`\n📅 Hạn dùng: {exp_date}\n\n*Khách có thể dùng key này trên Bot hoặc Script JS.*")
-    except:
-        bot.reply_to(message, "⚠️ Cú pháp: `/genkey [UID] [Ngày]`")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("smm_"))
+def smm_order(call):
+    platform = "Facebook" if "fb" in call.data else "TikTok"
+    msg = bot.send_message(call.message.chat.id, f"📥 **DỊCH VỤ {platform.upper()}:**\nVui lòng dán **Link bài viết/Link Profile** cần tăng tương tác:")
+    bot.register_next_step_handler(msg, process_smm_link, platform)
 
-@bot.message_handler(commands=['check', 'check_fb', 'unlock', 'unlock_fb'])
-def handle_services(message):
-    uid = message.from_user.id
-    auth, _ = check_access(uid)
-    if not auth:
-        return bot.reply_to(message, "🚫 Bạn chưa kích hoạt bản quyền. Vui lòng liên hệ Admin!")
+def process_smm_link(message, platform):
+    link = message.text
+    msg = bot.send_message(message.chat.id, "🔢 Nhập **số lượng** cần tăng (Ví dụ: 1000):")
+    bot.register_next_step_handler(msg, process_smm_final, platform, link)
 
-    cmd = message.text.split()[0][1:] # Lấy tên lệnh
-    try:
-        target = message.text.split()[1]
-        if 'check' in cmd:
-            res = check_tiktok(target) if cmd == 'check' else check_fb(target)
-            bot.reply_to(message, f"📊 **Kết quả:**\n{res}")
-        else:
-            bot.reply_to(message, f"⏳ Đang gửi yêu cầu kháng nghị cho `@{target}`...")
-            time.sleep(2)
-            bot.send_message(message.chat.id, "✅ Đã gửi đơn thành công! Vui lòng chờ 24-48h.")
-    except:
-        bot.reply_to(message, f"⚠️ Cú pháp: `/{cmd} [username/ID]`")
+def process_smm_final(message, platform, link):
+    qty = message.text
+    # Gửi thông tin về cho Admin
+    report = (f"🛒 **ĐƠN HÀNG MỚI (SMM)**\n"
+              f"━━━━━━━━━━━━━━━━━━━━\n"
+              f"👤 Khách: `{message.from_user.id}`\n"
+              f"🌐 Nền tảng: {platform}\n"
+              f"🔗 Link: {link}\n"
+              f"🔢 Số lượng: {qty}")
+    bot.send_message(QK_CONFIG['admin_id'], report, parse_mode="Markdown")
+    bot.send_message(message.chat.id, "✅ **Gửi yêu cầu thành công!** Admin sẽ xử lý đơn hàng của bạn ngay.", reply_markup=main_menu())
 
 # ==========================================
-# 6. DUY TRÌ KẾT NỐI (ANTI-CRASH)
+# 4. XỬ LÝ KHÔI PHỤC TÀI KHOẢN (RECOVERY)
 # ==========================================
+@bot.callback_query_handler(func=lambda call: call.data == "service_tk" or call.data == "service_fb")
+def handle_recovery(call):
+    platform = "Facebook" if "fb" in call.data else "TikTok"
+    msg = bot.send_message(call.message.chat.id, f"⚠️ **KHÔI PHỤC {platform.upper()}:**\nVui lòng nhập **UID/Link tài khoản** bị hack:")
+    bot.register_next_step_handler(msg, process_recovery_uid, platform)
+
+def process_recovery_uid(message, platform):
+    uid = message.text
+    msg = bot.send_message(message.chat.id, "📝 Mô tả tình trạng (Ví dụ: Bị đổi Email, SĐT):")
+    bot.register_next_step_handler(msg, process_recovery_final, platform, uid)
+
+def process_recovery_final(message, platform, uid):
+    desc = message.text
+    report = (f"🆘 **YÊU CẦU CỨU ACC**\n"
+              f"━━━━━━━━━━━━━━━━━━━━\n"
+              f"👤 Khách: `{message.from_user.id}`\n"
+              f"🌐 Nền tảng: {platform}\n"
+              f"🆔 UID: `{uid}`\n"
+              f"📜 Tình trạng: {desc}")
+    bot.send_message(QK_CONFIG['admin_id'], report, parse_mode="Markdown")
+    bot.send_message(message.chat.id, "✅ **Đã gửi thông tin cho Admin.** Vui lòng chờ phản hồi qua Zalo hoặc Telegram.", reply_markup=main_menu())
+
+# ==========================================
+# 5. CÁC NÚT QUAY LẠI & KEY INFO
+# ==========================================
+@bot.callback_query_handler(func=lambda call: call.data == "back_main")
+def back_to_main(call):
+    bot.edit_message_text(f"💎 **CHÀO MỪNG ĐẾN VỚI {QK_CONFIG['brand']}**", call.message.chat.id, call.message.message_id, reply_markup=main_menu())
+
+@bot.callback_query_handler(func=lambda call: call.data == "gen_key_info")
+def key_info(call):
+    bot.answer_callback_query(call.id, "Lệnh Admin: /genkey [UID] [Ngày]")
+
+# ==========================================
+# 6. DUY TRÌ ONLINE & CHỐNG SẬP
+# ==========================================
+def run_web():
+    app.run(host='0.0.0.0', port=10000)
+
 if __name__ == '__main__':
-    print(f"--- {QK_CONFIG['brand']} IS STARTING ---")
+    Thread(target=run_web).start()
+    print(f"--- {QK_CONFIG['brand']} SERVER IS ONLINE ---")
+    
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception as e:
-            print(f"Lỗi: {e}. Thử lại sau 5s...")
+            # Tự động kết nối lại sau 5s khi gặp lỗi mạng
             time.sleep(5)
