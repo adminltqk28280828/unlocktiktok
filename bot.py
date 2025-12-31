@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 # 1. CẤU HÌNH DOANH NGHIỆP QUOC KHANH MEDIA
 # ==========================================
 QK_CONFIG = {
-    'token': '8562421632:AAEqooqs8sqi5DSincjE1l3Ld53YkBBI0yw',
+    'token': '8584344283:AAGDhLs_Q-cfLXmpEElcD11fcox505703-U',
     'admin_id': 6684980246, # ID Lê Triệu Quốc Khánh
     'brand': 'QUOC KHANH MEDIA',
     'ceo': 'Lê Triệu Quốc Khánh',
